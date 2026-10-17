@@ -1,147 +1,91 @@
-from ursina import *
+from kivy.app import App
+from kivy.uix.widget import Widget
+from kivy.uix.label import Label
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.properties import NumericProperty
 import random
 
-app = Ursina()
+Window.clearcolor = (0.1, 0.1, 0.15, 1)
 
-window.title = 'Grimvalor - Full Game'
-window.borderless = False
+class Player(Widget):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.size = (60, 60)
+        self.pos = (100, Window.height/2)
 
-# === PLAYER STATS ===
-player_hp = 100
-max_hp = 100
-coins = 0
-score = 0
+class Enemy(Widget):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.size = (50, 50)
+        self.pos = (Window.width + random.randint(0, 300), random.randint(0, int(Window.height - 50)))
 
-# === WORLD ===
-Sky(color=color.rgb(10,10,30))
-ground = Entity(model='plane', scale=(200,1,200), color=color.rgb(25,25,25), collider='box', texture='white_cube')
+class Game(Widget):
+    score = NumericProperty(0)
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.player = Player()
+        self.add_widget(self.player)
+        self.enemies = []
+        self.score_label = Label(text='Score: 0', pos=(20, Window.height - 50), font_size=24, size_hint=(None, None))
+        self.add_widget(self.score_label)
+        
+        # Touch controls
+        self.touch_y = self.player.center_y
+        Clock.schedule_interval(self.update, 1/60)
+        Clock.schedule_interval(self.spawn_enemy, 1.5)
 
-# Castle Platforms
-platforms = []
-for i in range(25):
-    p = Entity(
-        model='cube',
-        color=color.rgb(70,50,30) if i%2==0 else color.dark_gray,
-        scale=(Vec3(random.randint(4,8), 1, random.randint(4,8))),
-        position=(random.randint(-40,40), random.randint(2,20), random.randint(-40,40)),
-        collider='box'
-    )
-    platforms.append(p)
+    def on_touch_move(self, touch):
+        self.touch_y = touch.y
+        return True
 
-# Player
-player = Entity(model='cube', color=color.azure, scale=(1,2,1), position=(0,15,0), collider='box')
-sword = Entity(parent=player, model='cube', color=color.light_gray, scale=(0.2,1.2,0.3), position=(0.7,0,0.6), rotation=(0,0,90), enabled=False)
+    def on_touch_down(self, touch):
+        self.touch_y = touch.y
+        return True
 
-# Coins
-coins_list = [Entity(model='sphere', color=color.gold, scale=0.6, position=(random.uniform(-35,35), random.uniform(3,18), random.uniform(-35,35)), collider='box') for _ in range(20)]
+    def spawn_enemy(self, dt):
+        e = Enemy()
+        self.enemies.append(e)
+        self.add_widget(e)
 
-# Enemies
-def make_enemy(pos, boss=False):
-    e = Entity(model='cube', color=color.red if not boss else color.rgb(180,0,180), scale=(1,2,1) if not boss else (2.5,3.5,2.5), position=pos, collider='box')
-    e.hp = 100 if not boss else 400
-    e.boss = boss
-    e.speed = 2.5 if not boss else 1.8
-    return e
+    def update(self, dt):
+        # Player movement
+        if abs(self.player.center_y - self.touch_y) > 5:
+            if self.player.center_y < self.touch_y:
+                self.player.y += 8
+            else:
+                self.player.y -= 8
 
-enemies = [make_enemy((15,2,10)), make_enemy((-20,5,-10)), make_enemy((25,8,-20)), make_enemy((-15,10,15))]
-final_boss = make_enemy((0,2,45), boss=True)
-enemies.append(final_boss)
+        # Enemy movement
+        for enemy in self.enemies[:]:
+            enemy.x -= 6
+            if enemy.right < 0:
+                self.remove_widget(enemy)
+                self.enemies.remove(enemy)
+                self.score += 1
+                self.score_label.text = f'Score: {self.score}'
+            
+            # Collision
+            if self.player.collide_widget(enemy):
+                self.score_label.text = f'GAME OVER! Score: {self.score} - Touch to Restart'
+                Clock.unschedule(self.update)
+                Clock.unschedule(self.spawn_enemy)
 
-# Physics
-vy = 0
-gravity = 32
-jump = 14
-speed = 7
-can_double = True
-dashing = False
-attacking = False
+    def on_touch_up(self, touch):
+        if 'GAME OVER' in self.score_label.text:
+            # Restart
+            for e in self.enemies[:]:
+                self.remove_widget(e)
+            self.enemies.clear()
+            self.score = 0
+            self.player.pos = (100, Window.height/2)
+            self.score_label.text = 'Score: 0'
+            Clock.schedule_interval(self.update, 1/60)
+            Clock.schedule_interval(self.spawn_enemy, 1.5)
 
-# UI
-hp_t = Text(text=f'HP: {player_hp}', pos=(-0.85,0.45), color=color.red, scale=1.5)
-coin_t = Text(text='Coins: 0', pos=(-0.85,0.40), color=color.yellow, scale=1.5)
-ctrl_t = Text(text='WASD Move | SPACE Double Jump | SHIFT Dash | F Attack', pos=(-0.75,-0.45), scale=0.9)
+class GrimApp(App):
+    def build(self):
+        return Game()
 
-def update():
-    global vy, can_double, player_hp, coins, dashing, attacking, score
-    if player_hp <= 0:
-        return
-
-    # Move
-    mx = held_keys['d'] - held_keys['a']
-    mz = held_keys['w'] - held_keys['s']
-    cur_speed = 14 if dashing else speed
-    player.x += mx * cur_speed * time.dt
-    player.z += mz * cur_speed * time.dt
-
-    # Gravity
-    hit = raycast(player.position+Vec3(0,0.5,0), (0,-1,0), 1.4, ignore=[player, sword]).hit
-    if not hit:
-        vy -= gravity * time.dt
-    else:
-        if vy < 0: vy = 0
-        can_double = True
-    player.y += vy * time.dt
-    if player.y < -30: player_hp = 0
-
-    # Camera
-    camera.position = lerp(camera.position, player.position + Vec3(0,6,-12), time.dt*5)
-    camera.look_at(player.position)
-
-    # Enemies AI
-    for e in enemies:
-        if e.hp <= 0: continue
-        d = distance(player, e)
-        if d < 25 and d > 2:
-            e.look_at(player)
-            e.position += e.forward * e.speed * time.dt
-        e.y -= 12*time.dt
-        if e.y < 1: e.y = 1
-        if d < 2.5 and random.random() < 0.015:
-            player_hp -= 15 if not e.boss else 30
-            hp_t.text = f'HP: {player_hp}'
-            player.blink(color.red, 0.1)
-
-    # Coins collect
-    for c in coins_list[:]:
-        if distance(player, c) < 1.6:
-            coins += 1
-            coin_t.text = f'Coins: {coins}'
-            destroy(c)
-            coins_list.remove(c)
-
-    if final_boss.hp <= 0:
-        Text(text='YOU WIN! BOSS DEFEATED!', origin=(0,0), scale=2, color=color.gold)
-
-def input(key):
-    global vy, can_double, dashing, attacking
-    if key == 'space':
-        if raycast(player.position+Vec3(0,0.5,0), (0,-1,0), 1.4, ignore=[player, sword]).hit:
-            vy = jump
-        elif can_double:
-            vy = jump
-            can_double = False
-    if key == 'shift' and not dashing:
-        dashing = True
-        player.color = color.cyan
-        invoke(lambda: (setattr(player, 'color', color.azure), setattr(globals(), 'dashing', False)), delay=0.35)
-    if key in ('f','left mouse down') and not attacking:
-        attacking = True
-        sword.enabled = True
-        sword.animate_rotation(Vec3(0,0,210), duration=0.12)
-        for e in enemies:
-            if distance(player, e) < 4 and e.hp > 0:
-                e.hp -= 40
-                e.blink(color.white, 0.1)
-                e.position += Vec3(random.uniform(-1,1),0.5,random.uniform(-1,1))
-                if e.hp <= 0:
-                    e.color = color.black
-                    e.collider = None
-        invoke(reset_atk, delay=0.2)
-
-def reset_atk():
-    global attacking
-    attacking = False
-    sword.enabled = False
-    sword.rotation_z = 90
-
-app.run()
+GrimApp().run()
